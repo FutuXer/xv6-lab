@@ -277,6 +277,8 @@ fork(void)
 
   np->parent = p;
 
+  np->tracemask = p->tracemask; // 新增: 从父进程复制跟踪掩码到子进程
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -692,4 +694,21 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// 新增函数: 计算非 UNUSED 状态的进程数量
+uint64
+proc_count()
+{
+  struct proc *p;
+  uint64 count = 0;
+  // 遍历进程表
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock); // 锁定进程以安全检查其状态
+    if(p->state != UNUSED){
+      count++;
+    }
+    release(&p->lock);
+  }
+  return count;
 }

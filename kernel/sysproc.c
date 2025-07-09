@@ -6,7 +6,10 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
-
+#include "syscall.h"
+#include "sysinfo.h"
+extern uint64 freemem_count(void);
+extern uint64 proc_count(void);
 uint64
 sys_exit(void)
 {
@@ -14,7 +17,7 @@ sys_exit(void)
   if(argint(0, &n) < 0)
     return -1;
   exit(n);
-  return 0;  // not reached
+  return 0;  // not reached.
 }
 
 uint64
@@ -94,4 +97,37 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_trace(void)
+{
+  int mask;
+
+  argint(0, &mask); // 从用户空间获取整数参数
+  myproc()->tracemask = mask; // 设置当前进程的 tracemask
+  return 0;
+}
+
+// 新增函数: sysinfo 系统调用的实现
+uint64
+sys_sysinfo(void)
+{
+  uint64 addr; // 用户空间 struct sysinfo 的地址
+  struct sysinfo si; // 内核空间的 sysinfo 结构体，用于填充数据
+
+  // 从用户空间获取 struct sysinfo 的地址
+  argaddr(0, &addr);
+
+  // 填充 sysinfo 结构体
+  si.freemem = freemem_count(); // 调用 kalloc.c 中的函数获取空闲内存
+  si.nproc = proc_count();       // 调用 proc.c 中的函数获取进程数
+
+  // 将填充好的 sysinfo 结构体复制回用户空间
+  // copyout(pagetable, user_dst_addr, kernel_src_addr, size)
+  if(copyout(myproc()->pagetable, addr, (char *)&si, sizeof(si)) < 0){
+    return -1; // 复制失败
+  }
+
+  return 0; // 成功
 }
