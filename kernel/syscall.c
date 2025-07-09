@@ -1,3 +1,5 @@
+// kernel/syscall.c
+
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
@@ -104,6 +106,36 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+extern uint64 sys_trace(void);   // 新增: trace 系统调用的外部声明
+extern uint64 sys_sysinfo(void); // 新增: sysinfo 系统调用的外部声明 
+
+// An array of syscall names, indexed by SYS_xyz.
+// 系统调用名称数组，通过 SYS_xyz 索引
+char *syscallnames[] = {
+  [SYS_fork]    "fork",
+  [SYS_exit]    "exit",
+  [SYS_wait]    "wait",
+  [SYS_pipe]    "pipe",
+  [SYS_read]    "read",
+  [SYS_kill]    "kill",
+  [SYS_exec]    "exec",
+  [SYS_fstat]   "fstat",
+  [SYS_chdir]   "chdir",
+  [SYS_dup]     "dup",
+  [SYS_getpid]  "getpid",
+  [SYS_sbrk]    "sbrk",
+  [SYS_sleep]   "sleep",
+  [SYS_uptime]  "uptime",
+  [SYS_open]    "open",
+  [SYS_write]   "write",
+  [SYS_mknod]   "mknod",
+  [SYS_unlink]  "unlink",
+  [SYS_link]    "link",
+  [SYS_mkdir]   "mkdir",
+  [SYS_close]   "close",
+  [SYS_trace]   "trace",   // 新增: trace 系统调用的名称
+  [SYS_sysinfo] "sysinfo", // 确保 sysinfo 系统调用的名称存在
+};
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -127,7 +159,9 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
-};
+[SYS_trace]   sys_trace,   // 新增: trace 系统调用的处理函数
+[SYS_sysinfo] sys_sysinfo, // 确保 sysinfo 系统调用的处理函数存在
+}; 
 
 void
 syscall(void)
@@ -137,10 +171,24 @@ syscall(void)
 
   num = p->trapframe->a7;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    // Call the system call function.
+    // 调用系统调用函数。
+    // sys_trace() sets p->tracemask to the mask argument.
+    // sys_trace() 会将 p->tracemask 设置为 mask 参数。
+    // All other system calls return 0 on success, -1 on failure.
+    // 所有其他系统调用成功返回 0，失败返回 -1。
     p->trapframe->a0 = syscalls[num]();
+
+    // Check if tracing is enabled for this syscall
+    // 检查是否为当前系统调用启用了跟踪
+    if ((p->tracemask >> num) & 1) { // 新增: 检查 tracemask 中第 num 位是否设置
+      printf("%d: syscall %s -> %d\n", p->pid, syscallnames[num], p->trapframe->a0); // 新增: 打印跟踪输出
+    }
   } else {
-    printf("%d %s: unknown sys call %d\n",
+    printf("%d %s: unknown syscall %d\n", // 修改: 将 "sys call" 改为 "syscall" 以保持一致性
             p->pid, p->name, num);
     p->trapframe->a0 = -1;
   }
 }
+
+
