@@ -113,6 +113,14 @@ found:
     return 0;
   }
 
+  // 为 trapframe_backup 分配一个页面  <--- 在这里添加
+  if((p->trapframe_backup = (struct trapframe *)kalloc()) == 0){ // 新增
+    kfree(p->trapframe); // 分配失败时，释放之前分配的 trapframe
+    p->trapframe = 0; // 清空指针
+    release(&p->lock);
+    return 0;
+  }
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -127,6 +135,12 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // 初始化警报相关的字段  <--- 在这里添加
+  p->alarm_interval = 0;
+  p->alarm_handler = 0;
+  p->ticks_count = 0;
+  p->in_alarm_handler = 0;
+
   return p;
 }
 
@@ -136,11 +150,22 @@ found:
 static void
 freeproc(struct proc *p)
 {
-  if(p->trapframe)
+  // 释放 trapframe
+  if(p->trapframe) {
     kfree((void*)p->trapframe);
+  }
   p->trapframe = 0;
-  if(p->pagetable)
+
+  // 释放 trapframe_backup  <--- 确保添加了这一段！
+  if(p->trapframe_backup) {
+    kfree((void*)p->trapframe_backup);
+  }
+  p->trapframe_backup = 0; // 置空指针，防止悬挂指针
+
+  // 释放 pagetable
+  if(p->pagetable) {
     proc_freepagetable(p->pagetable, p->sz);
+  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -150,6 +175,13 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  // 确保也释放了 kstack，如果你的 allocproc 为它分配了
+  //if(p->kstack) 
+  //{
+    //kfree((void*)p->kstack);
+  //}
+  //p->kstack = 0;
 }
 
 // Create a user page table for a given process,

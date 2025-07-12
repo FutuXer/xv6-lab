@@ -103,4 +103,14 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+    // ======== 警报相关新增字段 ========
+  int alarm_interval;          // 每隔多少 tick 触发警报
+  uint64 alarm_handler;        // 用户态警报处理函数的地址
+  int ticks_count;             // 从上次警报或启动以来，进程消耗的 CPU tick 数
+  int in_alarm_handler;        // 标志：当前是否正在执行用户态警报处理函数，防止嵌套中断
+
+  // 用于保存原始 trapframe，以便 sigreturn 恢复
+  struct trapframe *trapframe_backup; // 指向一个分配的 struct trapframe
+  // ===================================
 };

@@ -118,6 +118,7 @@ void
 panic(char *s)
 {
   pr.locking = 0;
+  backtrace();
   printf("panic: ");
   printf(s);
   printf("\n");
@@ -131,4 +132,38 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+
+// backtrace() 函数实现
+void
+backtrace(void)
+{
+  uint64 fp = r_fp(); // 获取当前帧指针
+  struct proc *p = myproc(); // 获取当前进程
+
+  // 获取当前进程的内核堆栈的底部和顶部地址。
+  // xv6 为每个进程分配一个页大小的内核堆栈，从 p->kstack 开始。
+  uint64 stack_bottom = p->kstack;
+  uint64 stack_top = p->kstack + PGSIZE; // 栈的最高有效地址 + 1
+
+  printf("backtrace:\n");
+
+  // 遍历堆栈帧
+  // 循环条件：
+  // 1. fp 必须非零。
+  // 2. fp 必须在当前进程的内核堆栈范围内 (stack_bottom < fp < stack_top)。
+  //    注意：fp 应该总是在 stack_bottom 和 stack_top 之间，且地址是增加的（指向栈帧的高地址部分）。
+  //    由于栈从高地址向低地址增长，所以 fp 通常在栈的较高部分，并指向前一个栈帧的 fp。
+  //    fp 本身不能是 kstack 的起始地址（最低地址），所以用 `>`。
+  while (fp != 0 && fp > stack_bottom && fp < stack_top) {
+    // 返回地址（Return Address, RA）通常在当前帧指针的固定偏移量 -8 处
+    // fp 寄存器 s0 存储的值是上一个栈帧的 fp。
+    // 当前函数的返回地址（RA）存储在当前 fp 所在位置的 -8 偏移处。
+    uint64 ra = *(uint64*)(fp - 8);
+    printf("0x%p\n", ra);
+
+    // 移动到上一个堆栈帧的帧指针
+    // 上一个堆栈帧的帧指针通常在当前帧指针的固定偏移量 -16 处
+    fp = *(uint64*)(fp - 16);
+  }
 }

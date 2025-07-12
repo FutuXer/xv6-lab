@@ -60,6 +60,12 @@ sys_sleep(void)
 
   if(argint(0, &n) < 0)
     return -1;
+
+  if (n > 0) 
+  {
+    backtrace();
+  }
+
   acquire(&tickslock);
   ticks0 = ticks;
   while(ticks - ticks0 < n){
@@ -94,4 +100,42 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_sigalarm(void)
+{
+  int interval;
+  uint64 handler; // 用户函数地址
+  struct proc *p = myproc();
+
+  // 获取参数
+  if(argint(0, &interval) < 0 || argaddr(1, &handler) < 0)
+    return -1;
+
+  // 将参数存储在进程结构中
+  p->alarm_interval = interval;
+  p->alarm_handler = handler;
+  p->ticks_count = 0; // 重置计时器，从现在开始计算
+
+  // 用于防止在警报处理程序内部再次触发警报
+  p->in_alarm_handler = 0; // 确保在设置新警报时清零
+
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+
+  // 关键步骤：将备份的 trapframe 恢复到当前的 trapframe
+  // 这将使进程从被中断的地方继续执行
+  if (p->trapframe_backup) { // 检查备份是否存在
+      *(p->trapframe) = *(p->trapframe_backup);
+  }
+  // 清除标志，表示不再处于警报处理程序中
+  p->in_alarm_handler = 0;
+
+  return 0;
 }

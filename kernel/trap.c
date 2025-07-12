@@ -77,8 +77,29 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  if(which_dev == 2) 
+  { // SCAUSE_TIMER
+    // 只有当进程设置了警报，并且当前不在警报处理函数中时，才处理
+    if(p->alarm_interval > 0 && !p->in_alarm_handler){
+      p->ticks_count++;
+      if(p->ticks_count >= p->alarm_interval){
+        // 达到或超过警报间隔，触发警报
+        p->ticks_count = 0; // 重置计数器
+
+        // 备份当前的 trapframe，以便用户处理函数返回后可以恢复
+        // 这里的 p->trapframe 是指向当前进程用户态 trapframe 的指针
+        // 而 p->trapframe_backup 是我们为备份分配的内存区域的指针
+        *(p->trapframe_backup) = *(p->trapframe);
+
+        // 修改 trapframe，使其从内核返回用户态时，跳转到用户警报处理函数
+        p->trapframe->epc = p->alarm_handler;
+
+        // 设置 in_alarm_handler 标志，防止在用户处理函数中再次触发警报
+        p->in_alarm_handler = 1;
+      }
+    }
+    yield(); // 原始的 yield() 仍然保留，用于进程调度
+  }
 
   usertrapret();
 }
