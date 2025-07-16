@@ -22,15 +22,31 @@ barrier_init(void)
   bstate.nthread = 0;
 }
 
-static void 
+static void
 barrier()
 {
-  // YOUR CODE HERE
-  //
-  // Block until all threads have called barrier() and
-  // then increment bstate.round.
-  //
-  
+  pthread_mutex_lock(&bstate.barrier_mutex);
+
+  // 记录当前线程的轮次
+  // 这是关键，用于防止线程“过早”进入下一轮的屏障
+  int current_round = bstate.round; 
+
+  bstate.nthread++; // 完成调用barrier线程的数量
+
+  if (bstate.nthread == nthread) { // 满足条件后唤醒所有线程
+    bstate.round++; // 递增轮次，表示屏障完成了一轮
+    bstate.nthread = 0; // **只有最后一个线程才重置计数器**
+    pthread_cond_broadcast(&bstate.barrier_cond);
+  } else {
+    // 休眠线程
+    // 调用这个函数后是先解锁，调用完成再加锁与xv6的sleep函数相同
+    // 确保线程在当前轮次完成前不会提前进入下一轮
+    while (current_round == bstate.round) {
+      pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+    }
+  }
+
+  pthread_mutex_unlock(&bstate.barrier_mutex);
 }
 
 static void *
