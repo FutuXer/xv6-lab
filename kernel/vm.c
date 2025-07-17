@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"			//add
+#include "proc.h"				//add
 
 /*
  * the kernel's page table.
@@ -14,6 +16,9 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+
+
+
 
 /*
  * create a direct-map page table for the kernel.
@@ -88,6 +93,24 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   return &pagetable[PX(0, va)];
 }
 
+void
+u2kvmcopy(pagetable_t upagetable, pagetable_t kernelpt, uint64 begin, uint64 end){
+  pte_t *pte_from, *pte_to;
+  uint64 pa, i;
+  uint flags;
+  uint64 begin_page = PGROUNDUP(begin);     // 向上取整‘
+  for(i = begin_page; i < end; i+= PGSIZE){
+    if((pte_from = walk(upagetable, i ,0)) == 0)
+      panic("u2kvmcopy: src pte does not exist");
+    if((pte_to = walk(kernelpt, i, 1)) == 0)
+      panic("u2kvmcopy: pte walk failed");
+    pa = PTE2PA(*pte_from);
+    flags = PTE_FLAGS(*pte_from) & (~PTE_U);
+    // 直接映射物理地址给内核页表
+    *pte_to = PA2PTE(pa) | flags;
+  }
+}
+
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
 // Can only be used to look up user pages.
@@ -132,7 +155,8 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  //pte = walk(kernel_pagetable, va, 0);
+  pte = walk(myproc()->kernel_pagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -140,6 +164,7 @@ kvmpa(uint64 va)
   pa = PTE2PA(*pte);
   return pa+off;
 }
+
 
 // Create PTEs for virtual addresses starting at va that refer to
 // physical addresses starting at pa. va and size might not
@@ -379,7 +404,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
+  /*uint64 n, va0, pa0;
 
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
@@ -395,7 +420,8 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     dst += n;
     srcva = va0 + PGSIZE;
   }
-  return 0;
+  return 0;*/
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -405,7 +431,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
+  /*uint64 n, va0, pa0;
   int got_null = 0;
 
   while(got_null == 0 && max > 0){
@@ -438,5 +464,95 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  }*/
+  return copyinstr_new(pagetable, dst, srcva, max);
+}
+
+void
+_vmprint(pagetable_t pagetable, int level)
+{
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) == 0)
+      continue;
+
+    char prefix[32];
+    // 每次进入循环时都清空 prefix 缓冲区
+    memset(prefix, 0, sizeof(prefix)); // 确保缓冲区以 null 字节填充
+
+    if(level == 0) {
+      // 注意这里，为了匹配正则 ".. 0:"，需要在 ".." 后面加一个空格
+      // 并且确保没有 "?" 字符
+      snprintf(prefix, sizeof(prefix), ".. %d:", i);
+    } else if(level == 1) { // 使用 else if 确保只有一个条件被执行
+      snprintf(prefix, sizeof(prefix), ".. .. %d:", i); // 同样在每个 ".." 后加空格
+    } else if(level == 2) {
+      snprintf(prefix, sizeof(prefix), ".. .. .. %d:", i); // 同样在每个 ".." 后加空格
+    } else {
+        // 防止意外的 level 值，或者添加更多级别的处理
+        snprintf(prefix, sizeof(prefix), "....%d:", i); // 默认处理，防止乱码
+    }
+
+    // 打印时，确保 %p 打印的是 0x 开头的地址格式
+    // 并且确保 prefix 和 pte 之间有空格
+    printf("%s pte %p pa %p\n", prefix, pte, PTE2PA(pte));
+
+    // 非叶节点 PTE (不是 PTE_R|PTE_W|PTE_X 的组合) 才继续递归
+    // 注意：xv6 通常用 PTE_V | PTE_R | PTE_W | PTE_X 来表示叶子节点
+    // 如果一个 PTE 既是有效的 (PTE_V) 又没有 R/W/X 权限，它可能指向下一级页表
+    // 但是 xv6 的页表结构通常是，最后一级叶子节点有 R/W/X，非叶子节点没有 R/W/X
+    // 并且非叶子节点会有 PTE_A (accessed) 和 PTE_D (dirty) 但不是必须的。
+    // 最准确的判断是否为叶子节点的方式是检查 PTE_V 和 PTE_R | PTE_W | PTE_X
+    // 如果 PTE 是有效的，且没有 R/W/X 权限，那它就是指向下一级页表的指针
+    if((pte & PTE_V) && !(pte & (PTE_R|PTE_W|PTE_X))) {
+      uint64 child = PTE2PA(pte);
+      _vmprint((pagetable_t)child, level + 1);
+    }
   }
+}
+
+void 
+vmprint(pagetable_t pagetable)
+{
+  printf("page table %p\n", pagetable);
+  _vmprint(pagetable, 0);
+}
+
+// 仿造kvmmap
+void
+uvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm){
+  if(mappages(pagetable, va, sz, pa, perm) != 0)
+    panic("uvmmap");
+}
+
+//用于在allocproc中初始化进程的内核页表,allocproc 在 proc.c 里面
+pagetable_t
+proc_kpt_init(){
+  pagetable_t kernelpt = uvmcreate();
+  if (kernelpt == 0) return 0;
+  //接下来和 kvmmap是一样的
+  
+  //异步寄存器
+  uvmmap(kernelpt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  //虚拟内存磁盘接口
+  uvmmap(kernelpt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  //CLINIT
+  uvmmap(kernelpt,CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  //PLIC
+  uvmmap(kernelpt,PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  // map kernel text executable and read-only.
+  uvmmap(kernelpt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+  // map kernel data and the physical RAM we'll make use of.
+  uvmmap(kernelpt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  uvmmap(kernelpt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kernelpt;
+}
+
+void
+proc_inithart(pagetable_t kpt){
+  w_satp(MAKE_SATP(kpt));
+  sfence_vma();
 }

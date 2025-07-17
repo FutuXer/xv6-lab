@@ -1,0 +1,6 @@
+思考题
+​ 三个return -1的条件分别为srcva >= p->sz , srcva + len >= p->sz , srcva + len < srcva。
+很显然，第三个条件是用来检测srcva溢出的，防止无符号整数上溢。
+由于srcva和len均为uint64类型的变量，当srcva小于p->sz但是len为一个极大的数时，如0xffff...fff（即对应-1）。
+由于无符号整数溢出便可以满足srcva + len < p->sz这一条件，但实际上复制了大量内存。
+而通过scrva + len < srcva这一判断条件能够检测出溢出。
