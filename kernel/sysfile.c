@@ -16,6 +16,8 @@
 #include "file.h"
 #include "fcntl.h"
 
+#define NSYMLINK 10
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -283,6 +285,43 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+static struct inode* follow_symlink(struct inode* ip) {
+  uint inums[NSYMLINK];
+  int i, j;
+  char target[MAXPATH];
+
+  for(i = 0; i < NSYMLINK; ++i) {
+    inums[i] = ip->inum;
+    // read the target path from symlink file
+    if(readi(ip, 0, (uint64)target, 0, MAXPATH) <= 0) {
+      iunlockput(ip);
+      printf("open_symlink: open symlink failed\n");
+      return 0;
+    }
+    iunlockput(ip);
+    
+    // get the inode of target path 
+    if((ip = namei(target)) == 0) {
+      printf("open_symlink: path \"%s\" is not exist\n", target);
+      return 0;
+    }
+    for(j = 0; j <= i; ++j) {
+      if(ip->inum == inums[j]) {
+        printf("open_symlink: links form a cycle\n");
+        return 0;
+      }
+    }
+    ilock(ip);
+    if(ip->type != T_SYMLINK) {
+      return ip;
+    }
+  }
+
+  iunlockput(ip);
+  printf("open_symlink: the depth of links reaches the limit\n");
+  return 0;
+}
+
 uint64
 sys_open(void)
 {
@@ -320,6 +359,15 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  // handle the symlink - lab9-2
+  if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
+    if((ip = follow_symlink(ip)) == 0) {
+      // 此处不用调用iunlockput()释放锁,因为在follow_symlinktest()返回失败时ip的锁在函数内已经被释放
+      end_op();
+      return -1;
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -484,3 +532,35 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64 sys_symlink(void) {
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+  int n;
+
+  if ((n = argstr(0, target, MAXPATH)) < 0
+    || argstr(1, path, MAXPATH) < 0) {
+    return -1;
+  }
+
+  begin_op();
+  // create the symlink's inode
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0) {
+    end_op();
+    return -1;
+  }
+  // write the target path to the inode
+  if(writei(ip, 0, (uint64)target, 0, n) != n) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
+// recursively follow the symlinks - lab9-2
+// Caller must hold ip->lock
+// and when function returned, it holds ip->lock of returned ip
